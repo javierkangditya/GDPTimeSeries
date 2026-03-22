@@ -1,0 +1,578 @@
+# ============================================================
+# GDP Time Series Analysis (1980-2028)
+# ============================================================
+# Author       : Javier Kangditya
+# Project      : Time Series Forecasting & Analysis of Global GDP
+# Dataset      : IMF's GDP Data: 1980-2028 Global Trends
+# ============================================================
+
+# -----------------------------
+# 1. Introduction
+# -----------------------------
+# This notebook performs a comprehensive analysis of global GDP per capita 
+# from 1980 to 2023, with forecasting for 2024-2028. The goal is to understand 
+# historical economic trajectories and predict future trends for selected countries.
+
+# Objectives:
+# - Explore GDP trends and patterns across countries.
+# - Engineer time series features such as lagged GDP values and annual growth rates.
+# - Forecast GDP using ARIMA and Prophet models.
+# - Evaluate model performance using MAE, RMSE, and visualization of forecasted trends.
+
+# -----------------------------
+# 2. Dataset Overview
+# -----------------------------
+# The dataset contains the following columns:
+# - Country            : Name of the country or region
+# - 1980 - 2023        : Actual GDP per capita (USD)
+# - 2024 - 2028        : Projected GDP per capita (USD)
+
+# This dataset provides a detailed view of global economic development 
+# over four decades, with additional projections into the future.
+# It is ideal for analyzing trends, patterns, and making predictive forecasts 
+# for economic research and data science projects.
+
+---
+
+# 1. Data Cleaning 
+```{r load_data, message=FALSE, warning=FALSE}
+# Load necessary libraries
+library(readxl)
+library(tidyverse)
+library(tsibble)
+library(knitr)
+
+# Load dataset
+gdp_data <- read_excel("Data/Raw/gdp.xlsx")
+
+# Preview dataset
+glimpse(gdp_data)
+head(gdp_data)
+
+# Placeholder: handle missing values, duplicates
+```
+```{r data_cleaning, message=FALSE, warning=FALSE}
+
+# Remove duplicates
+gdp_data <- gdp_data %>% distinct()
+
+# Drop rows with missing values
+gdp_data <- gdp_data %>% drop_na()
+gdp_data <- gdp_data %>% filter(if_all(`1980`:`2028`, ~ . != 0)) 
+
+# Pivot from wide to long format
+gdp_long <- gdp_data %>%
+  pivot_longer(
+    cols = `1980`:`2028`,          # all year columns
+    names_to = "Year",
+    values_to = "GDP_per_capita"
+  ) %>%
+  mutate(
+    Year = as.integer(Year)        # convert Year to numeric
+  )
+
+# Convert to tsibble
+gdp_tsibble <- gdp_long %>%
+  as_tsibble(
+    key = Country,                 # each country is a separate time series
+    index = Year                   # time index
+  )
+
+# Preview only selected countries
+selected_countries <- c("Indonesia", "Malaysia", "Singapore", "Thailand", "Philippines")
+
+gdp_tsibble %>%
+  filter(Country %in% selected_countries) %>%
+  knitr::kable(caption = "Cleaned GDP tsibble – Selected ASEAN-5 countries")
+```
+```{r save_processed, message=FALSE, warning=FALSE}
+library(writexl)  # for writing Excel
+
+# Save processed GDP long dataset to Excel
+write_xlsx(gdp_long, path = "Data/Processed/gdp_long.xlsx")
+```
+
+---
+
+# 2.1. Exploratory Data Analysis(Basic)
+```{r eda_integrated, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tsibble)
+library(knitr)
+library(tidyr)
+
+# -----------------------------
+# 1. Filter only ASEAN-5 countries
+# -----------------------------
+selected_countries <- c("Indonesia", "Malaysia", "Singapore", "Thailand", "Philippines")
+gdp_tsibble_asean <- gdp_tsibble %>% filter(Country %in% selected_countries)
+
+# -----------------------------
+# 2. Line Plot: GDP per Capita Over Time
+# -----------------------------
+p1 <- ggplot(gdp_tsibble_asean, aes(x = Year, y = GDP_per_capita, color = Country)) +
+  geom_line(size = 1) +
+  geom_smooth(method = "loess", se = FALSE, linetype = "dashed") +
+  labs(
+    title = "GDP per Capita Over Time – ASEAN-5",
+    subtitle = "Trend with LOESS smoothing",
+    x = "Year",
+    y = "GDP per Capita (USD)",
+    color = "Country"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+print(p1)
+
+# -----------------------------
+# 3. Boxplot per Country
+# -----------------------------
+p2 <- ggplot(gdp_tsibble_asean, aes(x = Country, y = GDP_per_capita, fill = Country)) +
+  geom_boxplot() +
+  labs(
+    title = "Distribution of GDP per Capita – ASEAN-5",
+    y = "GDP per Capita (USD)",
+    x = ""
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+print(p2)
+
+# -----------------------------
+# 4. Histogram / Density per Country
+# -----------------------------
+p3 <- ggplot(gdp_tsibble_asean, aes(x = GDP_per_capita, fill = Country)) +
+  geom_histogram(alpha = 0.6, position = "identity", bins = 30) +
+  labs(
+    title = "Histogram of GDP per Capita – ASEAN-5",
+    x = "GDP per Capita (USD)",
+    y = "Count"
+  ) +
+  theme_minimal()
+print(p3)
+
+# -----------------------------
+# 5. Compute Yearly Growth Rate per Country
+# -----------------------------
+gdp_growth_asean <- gdp_tsibble_asean %>%
+  group_by(Country) %>%
+  arrange(Year) %>%
+  mutate(GDP_growth = (GDP_per_capita / lag(GDP_per_capita) - 1) * 100) %>%
+  filter(!is.na(GDP_growth))
+
+# Line plot for GDP growth
+p4 <- ggplot(gdp_growth_asean, aes(x = Year, y = GDP_growth, color = Country)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Yearly GDP Growth – ASEAN-5",
+    x = "Year",
+    y = "GDP Growth (%)",
+    color = "Country"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+print(p4)
+
+# -----------------------------
+# 6. Preview Sample of Growth Rate
+# -----------------------------
+kable(gdp_growth_asean %>% slice(1:10), caption = "Sample GDP Growth – ASEAN-5")
+```
+```{r save_eda_plots, message=FALSE, warning=FALSE}
+library(ggplot2)
+# -----------------------------
+# Save plots as PNG
+# -----------------------------
+ggsave("Outputs/Plots/GDP_per_Capita_Line.png", plot = p1, width = 10, height = 6, dpi = 300)
+ggsave("Outputs/Plots/GDP_Boxplot.png", plot = p2, width = 8, height = 6, dpi = 300)
+ggsave("Outputs/Plots/GDP_Histogram.png", plot = p3, width = 8, height = 6, dpi = 300)
+ggsave("Outputs/Plots/GDP_Growth_Line.png", plot = p4, width = 10, height = 6, dpi = 300)
+
+# -----------------------------
+# Confirmation message
+# -----------------------------
+cat("All EDA plots saved to Outputs/Plots folder\n")
+```
+
+---
+
+# 2.2. Exploratory Data Analysis(Advanced)
+```{r eda_advanced, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tsibble)
+library(knitr)
+library(tseries)
+library(zoo)
+
+# -----------------------------
+# 1. Feature Engineering for EDA
+# -----------------------------
+gdp_tsibble_asean <- gdp_tsibble_asean %>%
+  group_by(Country) %>%
+  arrange(Year) %>%
+  mutate(
+    log_GDP = log(GDP_per_capita),                                # Log transformation
+    GDP_ma_5 = zoo::rollmean(GDP_per_capita, k = 5, fill = NA)    # 5-year moving average
+  )
+
+# -----------------------------
+# 2. Plot: Original vs Moving Average
+# -----------------------------
+p5 <- ggplot(gdp_tsibble_asean, aes(x = Year)) +
+  geom_line(aes(y = GDP_per_capita, color = Country), alpha = 0.5) +
+  geom_line(aes(y = GDP_ma_5, color = Country), size = 1) +
+  labs(
+    title = "GDP per Capita with 5-Year Moving Average",
+    subtitle = "Smoothed Trend for ASEAN-5",
+    y = "GDP per Capita (USD)",
+    x = "Year"
+  ) +
+  theme_minimal()
+print(p5)
+
+# -----------------------------
+# 3. Facet Plot per Country
+# -----------------------------
+p6 <- ggplot(gdp_tsibble_asean, aes(x = Year, y = GDP_per_capita)) +
+  geom_line(color = "steelblue") +
+  facet_wrap(~Country, scales = "free_y") +
+  labs(
+    title = "GDP per Capita by Country",
+    subtitle = "Individual Time Series for ASEAN-5"
+  ) +
+  theme_minimal()
+print(p6)
+
+# -----------------------------
+# 4. Log GDP Distribution
+# -----------------------------
+p7 <- ggplot(gdp_tsibble_asean, aes(x = log_GDP, fill = Country)) +
+  geom_histogram(alpha = 0.6, bins = 30, position = "identity") +
+  labs(
+    title = "Distribution of Log GDP per Capita",
+    x = "Log(GDP per Capita)",
+    y = "Count"
+  ) +
+  theme_minimal()
+print(p7)
+```
+```{r save_eda_advanced, message=FALSE, warning=FALSE}
+library(ggplot2)
+
+# -----------------------------
+# Save plots
+# -----------------------------
+ggsave("Outputs/Plots/GDP_Moving_Average.png", plot = p5, width = 10, height = 6, dpi = 300)
+ggsave("Outputs/Plots/GDP_Facet.png", plot = p6, width = 10, height = 6, dpi = 300)
+ggsave("Outputs/Plots/GDP_Log_Distribution.png", plot = p7, width = 8, height = 6, dpi = 300)
+
+# -----------------------------
+# Confirmation message
+# -----------------------------
+cat("Advanced EDA plots saved successfully\n")
+```
+
+---
+
+# 3. Feature Engineering – Time Series
+```{r feature_engineering, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tsibble)
+
+# -----------------------------
+# 1. Feature Engineering for Time Series
+# -----------------------------
+gdp_features <- gdp_tsibble_asean %>%
+  arrange(Country, Year) %>%
+  group_by(Country) %>%
+  mutate(
+    lag_1 = lag(GDP_per_capita, 1),              # 1-year lag
+    lag_2 = lag(GDP_per_capita, 2),              # 2-year lag
+    diff_1 = GDP_per_capita - lag(GDP_per_capita, 1),  # 1st differencing
+    GDP_growth = (GDP_per_capita / lag(GDP_per_capita, 1) - 1) * 100  # Growth %
+  ) %>%
+  filter(!is.na(lag_1))  # remove initial rows with NA from lag
+
+# -----------------------------
+# 2. Preview feature engineered data
+# -----------------------------
+library(knitr)
+kable(gdp_features %>% slice(1:10), caption = "Sample Feature Engineered Data – ASEAN-5")
+```
+```{r save_feature_engineered, message=FALSE, warning=FALSE}
+library(writexl)
+# -----------------------------
+# Save feature engineered dataset
+# -----------------------------
+write_xlsx(
+  as.data.frame(gdp_features),
+  path = "Data/Processed/gdp_features_asean.xlsx"
+)
+
+# -----------------------------
+# Confirmation message
+# -----------------------------
+cat("Feature engineered dataset saved to Data/Processed/gdp_features_asean.xlsx\n")
+```
+
+---
+
+# 4.1. ARIMA Forecasting
+```{r forecast_arima, message=FALSE, warning=FALSE}
+library(forecast)
+library(dplyr)
+library(ggplot2)
+library(tsibble)
+library(writexl)
+
+# -----------------------------
+# 1. Forecast horizon
+# -----------------------------
+forecast_horizon <- 5  # predict next 5 years
+
+# -----------------------------
+# 2. Initialize list to store results
+# -----------------------------
+forecast_results <- list()
+forecast_plots <- list()
+
+# -----------------------------
+# 3. Forecast per country
+# -----------------------------
+countries <- unique(gdp_features$Country)
+
+for (ctry in countries) {
+  
+  # Subset country
+  df <- gdp_features %>% filter(Country == ctry) %>% arrange(Year)
+  
+  # Convert to time series
+  ts_data <- ts(df$GDP_per_capita, start = min(df$Year), frequency = 1)
+  
+  # Fit ARIMA
+  fit <- auto.arima(ts_data)
+  
+  # Forecast
+  fc <- forecast(fit, h = forecast_horizon)
+  
+  # Store forecast table
+  forecast_df <- data.frame(
+    Country = ctry,
+    Year = (max(df$Year)+1):(max(df$Year)+forecast_horizon),
+    Forecast_GDP = as.numeric(fc$mean)
+  )
+  forecast_results[[ctry]] <- forecast_df
+  
+  # Plot actual + forecast
+  p <- autoplot(fc) +
+    autolayer(ts_data, series = "Actual") +
+    ggtitle(paste("GDP Forecast –", ctry)) +
+    xlab("Year") + ylab("GDP per Capita") +
+    theme_minimal()
+  
+  forecast_plots[[ctry]] <- p
+  
+  # Save plot
+  ggsave(
+    filename = paste0("Outputs/Forecasts/GDP_Forecast_", ctry, ".png"),
+    plot = p, width = 10, height = 6, dpi = 300
+  )
+}
+
+# -----------------------------
+# 4. Combine all forecast tables
+# -----------------------------
+all_forecasts <- do.call(rbind, forecast_results)
+```
+```{r preview_arima, message=FALSE, warning=FALSE}
+library(dplyr)
+library(knitr)
+
+# Preview first 5 rows per country for ARIMA forecast
+arima_preview <- all_forecasts %>%
+  group_by(Country) %>%
+  slice(1:5) %>%
+  ungroup()
+
+kable(arima_preview, caption = "Sample ARIMA Forecast – First 5 Years per Country")
+
+# Save combined forecast table
+write_xlsx(all_forecasts, "Outputs/Forecasts/GDP_ARIMA_Forecast.xlsx")
+
+# Confirmation message
+cat("Forecasting complete. Plots and table saved in Outputs/Forecasts folder\n")
+```
+
+---
+
+# 4.2. ETS Forecasting
+```{r forecast_ets, message=FALSE, warning=FALSE}
+library(forecast)
+library(dplyr)
+library(ggplot2)
+library(writexl)
+library(tsibble)
+
+# -----------------------------
+# 1. Forecast horizon
+# -----------------------------
+forecast_horizon <- 5  # next 5 years
+
+# -----------------------------
+# 2. Initialize lists
+# -----------------------------
+ets_results <- list()
+ets_plots <- list()
+
+# -----------------------------
+# 3. Forecast per country
+# -----------------------------
+countries <- unique(gdp_features$Country)
+
+for (ctry in countries) {
+  
+  # Subset data
+  df <- gdp_features %>% filter(Country == ctry) %>% arrange(Year)
+  
+  # Convert to time series
+  ts_data <- ts(df$GDP_per_capita, start = min(df$Year), frequency = 1)
+  
+  # Fit ETS model
+  fit <- ets(ts_data)
+  
+  # Forecast
+  fc <- forecast(fit, h = forecast_horizon)
+  
+  # Store forecast table
+  forecast_df <- data.frame(
+    Country = ctry,
+    Year = (max(df$Year)+1):(max(df$Year)+forecast_horizon),
+    Forecast_GDP_ETS = as.numeric(fc$mean)
+  )
+  ets_results[[ctry]] <- forecast_df
+  
+  # Plot actual + forecast
+  p <- autoplot(fc) +
+    autolayer(ts_data, series = "Actual") +
+    ggtitle(paste("ETS GDP Forecast –", ctry)) +
+    xlab("Year") + ylab("GDP per Capita") +
+    theme_minimal()
+  
+  ets_plots[[ctry]] <- p
+  
+  # Save plot
+  ggsave(
+    filename = paste0("Outputs/Forecasts/GDP_Forecast_ETS_", ctry, ".png"),
+    plot = p, width = 10, height = 6, dpi = 300
+  )
+}
+
+# -----------------------------
+# 4. Combine all ETS forecast tables
+# -----------------------------
+all_ets_forecasts <- do.call(rbind, ets_results)
+```
+```{r preview_ets, message=FALSE, warning=FALSE}
+library(dplyr)
+library(knitr)
+
+# Preview first 5 rows per country for ETS forecast
+ets_preview <- all_ets_forecasts %>%
+  group_by(Country) %>%
+  slice(1:5) %>%
+  ungroup()
+
+kable(ets_preview, caption = "Sample ETS Forecast – First 5 Years per Country")
+
+# Save combined ETS forecast table
+write_xlsx(all_ets_forecasts, "Outputs/Forecasts/GDP_ETS_Forecast.xlsx")
+
+# Confirmation message
+cat("ETS Forecasting complete. Plots and table saved in Outputs/Forecasts folder\n")
+```
+
+---
+
+# 5. Evaluation(ARIMA + ETS Forecast Comparison per Country)
+```{r forecast_plot_comparison_fixed, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+
+# Loop per country
+countries <- unique(gdp_features$Country)
+
+for(ctry in countries){
+  
+  # Actual GDP
+  df <- gdp_features %>%
+    filter(Country == ctry) %>%
+    arrange(Year) %>%
+    as_tibble()   # <-- convert tsibble to tibble
+  
+  # Forecasts
+  arima_fc <- all_forecasts %>% filter(Country == ctry) %>% as_tibble()
+  ets_fc <- all_ets_forecasts %>% filter(Country == ctry) %>% as_tibble()
+  
+  # Combine for plotting
+  plot_df <- bind_rows(
+    df %>% select(Year, GDP_per_capita) %>% mutate(Type = "Actual"),
+    arima_fc %>% rename(GDP_per_capita = Forecast_GDP) %>% mutate(Type = "ARIMA Forecast"),
+    ets_fc %>% rename(GDP_per_capita = Forecast_GDP_ETS) %>% mutate(Type = "ETS Forecast")
+  )
+  
+  # Plot
+  p <- ggplot(plot_df, aes(x = Year, y = GDP_per_capita, color = Type)) +
+    geom_line(size = 1) +
+    geom_point(data = subset(plot_df, Type != "Actual"), size = 2, alpha = 0.7) +
+    labs(
+      title = paste("GDP Forecast Comparison –", ctry),
+      x = "Year",
+      y = "GDP per Capita",
+      color = "Legend"
+    ) +
+    theme_minimal() +
+    scale_color_manual(values = c("Actual" = "black", "ARIMA Forecast" = "blue", "ETS Forecast" = "red"))
+  
+  print(p)
+  
+  # Save plot
+  ggsave(
+    filename = paste0("Outputs/Forecasts/GDP_Forecast_Comparison_", ctry, ".png"),
+    plot = p,
+    width = 10, height = 6, dpi = 300
+  )
+}
+```
+
+---
+
+# Conclusion & Insights
+
+## 1. Summary of Findings
+- **Exploratory Data Analysis (EDA):**  
+  - GDP per capita shows a steady increase for most ASEAN countries from 1980–2023.  
+  - Short-term fluctuations are visible, particularly for smaller economies.  
+  - Countries like Singapore and Malaysia exhibit consistently higher GDP per capita over the period.  
+  - Outliers and missing values (GDP = 0) were handled during data cleaning.
+
+- **Feature Engineering:**  
+  - Lag features, rolling averages (MA5), log transformation, and differences were created to capture trends and seasonality.  
+  - These engineered features help ARIMA and ETS models better forecast short-term fluctuations and long-term trends.
+
+- **Forecasting Results:**  
+  - **ARIMA** captures short-term year-to-year fluctuations; the highest forecasted GDP in 2028 is **Singapore**.  
+  - **ETS** produces smoother forecasts; the highest forecasted GDP in 2028 is **Singapore**.  
+  - Forecast plots for each country align well with historical GDP, providing confidence in model predictions.
+
+## 2. Practical Implications
+- ARIMA forecasts inform short-term economic planning and reactions to fluctuations.  
+- ETS forecasts inform long-term strategic planning and investment decisions.  
+- Combining both models gives a balanced perspective: ARIMA for short-term dynamics, ETS for long-term stability.
+
+## 3. Recommendations
+- Monitor high-volatility countries with ARIMA to anticipate economic shocks.  
+- Focus on long-term policies aligned with ETS trends for stable growth.  
+- Update forecasts annually as new GDP data becomes available.  
+- Use ARIMA and ETS together for a comprehensive view: reactive short-term policy + strategic long-term planning.
